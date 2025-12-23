@@ -60,66 +60,19 @@ const App: React.FC = () => {
     else if (id === 'GLOBAL_SMS') navigateTo('GLOBAL_SMS');
     else if (id === 'GLOBAL_DATA') navigateTo('GLOBAL_DATA');
     else if (id === 'HOME') navigateTo('HOME');
+    else if (id === 'FAVORITES') navigateTo('FAVORITES');
   };
 
   if (appState.currentScreen === 'LOGIN') {
     return <Login onLoginSuccess={handleLoginSuccess} />;
   }
 
-  const renderScreen = () => {
-    switch (appState.currentScreen) {
-      case 'HOME':
-        return (
-          <Home 
-            onSelectUserForSMS={handleSelectUserForSMS}
-            onSelectUserForData={handleSelectUserForData}
-            onGlobalSMS={() => navigateTo('GLOBAL_SMS')}
-            onGlobalData={() => navigateTo('GLOBAL_DATA')}
-            onLogout={handleLogout}
-            onOpenNotifications={() => navigateTo('NOTIFICATIONS')}
-            onOpenFavorites={() => navigateTo('FAVORITES')}
-            onNav={handleBottomNav}
-            user={appState.user}
-            highlightUserId={highlightUserId}
-          />
-        );
-      case 'SMS_VIEW':
-        return appState.selectedTargetUser ? (
-          <SmsViewer targetUser={appState.selectedTargetUser} onBack={handleBackToHome} />
-        ) : null;
-      case 'GLOBAL_SMS':
-        return <SmsViewer targetUser={null} onBack={handleBackToHome} />;
-      case 'DATA_VIEW':
-        return appState.selectedTargetUser ? (
-          <UserDataViewer targetUser={appState.selectedTargetUser} onBack={handleBackToHome} />
-        ) : null;
-      case 'GLOBAL_DATA':
-        return <GlobalDataViewer onBack={handleBackToHome} />;
-      case 'NOTIFICATIONS':
-        return <Notifications onBack={handleBackToHome} />;
-      case 'FAVORITES':
-        return (
-          <FavoritesList 
-            onBack={handleBackToHome} 
-            onSelectUserForSMS={handleSelectUserForSMS}
-            onSelectUserForData={handleSelectUserForData}
-          />
-        );
-      case 'BANK_SUMMARY':
-        return (
-          <BankBalanceSummary 
-            onBack={handleBackToHome}
-            onSelectUserForSMS={handleSelectUserForSMS}
-            onSelectUserForData={handleSelectUserForData}
-            onViewUser={handleViewUser}
-          />
-        );
-      case 'MESSAGES':
-        return <MessagesViewer onBack={handleBackToHome} />;
-      case 'LOGIN':
-        return <Login onLoginSuccess={handleLoginSuccess} />;
-      default:
-        return <Home 
+  const isHomeVisible = appState.currentScreen === 'HOME';
+
+  return (
+    <div className="h-full w-full relative">
+      <div className={isHomeVisible ? 'h-full w-full' : 'hidden'}>
+        <Home 
           onSelectUserForSMS={handleSelectUserForSMS}
           onSelectUserForData={handleSelectUserForData}
           onGlobalSMS={() => navigateTo('GLOBAL_SMS')}
@@ -129,13 +82,54 @@ const App: React.FC = () => {
           onOpenFavorites={() => navigateTo('FAVORITES')}
           onNav={handleBottomNav}
           user={appState.user}
-        />;
-    }
-  };
+          highlightUserId={highlightUserId}
+        />
+      </div>
 
-  return (
-    <div className="h-full w-full relative">
-      {renderScreen()}
+      {!isHomeVisible && (
+        <div className="h-full w-full absolute inset-0 z-50 bg-white">
+          {(() => {
+            switch (appState.currentScreen) {
+              case 'SMS_VIEW':
+                return appState.selectedTargetUser ? (
+                  <SmsViewer targetUser={appState.selectedTargetUser} onBack={handleBackToHome} />
+                ) : null;
+              case 'GLOBAL_SMS':
+                return <SmsViewer targetUser={null} onBack={handleBackToHome} />;
+              case 'DATA_VIEW':
+                return appState.selectedTargetUser ? (
+                  <UserDataViewer targetUser={appState.selectedTargetUser} onBack={handleBackToHome} />
+                ) : null;
+              case 'GLOBAL_DATA':
+                return <GlobalDataViewer onBack={handleBackToHome} />;
+              case 'NOTIFICATIONS':
+                return <Notifications onBack={handleBackToHome} />;
+              case 'FAVORITES':
+                return (
+                  <FavoritesList 
+                    onBack={handleBackToHome} 
+                    onSelectUserForSMS={handleSelectUserForSMS}
+                    onSelectUserForData={handleSelectUserForData}
+                    user={appState.user}
+                  />
+                );
+              case 'BANK_SUMMARY':
+                return (
+                  <BankBalanceSummary 
+                    onBack={handleBackToHome}
+                    onSelectUserForSMS={handleSelectUserForSMS}
+                    onSelectUserForData={handleSelectUserForData}
+                    onViewUser={handleViewUser}
+                  />
+                );
+              case 'MESSAGES':
+                return <MessagesViewer onBack={handleBackToHome} />;
+              default:
+                return null;
+            }
+          })()}
+        </div>
+      )}
     </div>
   );
 };

