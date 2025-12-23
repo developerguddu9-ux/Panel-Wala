@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import Login from './components/Login';
 import Home from './components/Home';
 import SmsViewer from './components/Dashboard'; 
@@ -18,6 +18,8 @@ const App: React.FC = () => {
     selectedTargetUser: null
   });
 
+  const [highlightUserId, setHighlightUserId] = useState<string | null>(null);
+
   const handleLoginSuccess = (user: User) => {
     setAppState(prev => ({ ...prev, user, currentScreen: 'HOME' }));
   };
@@ -27,15 +29,15 @@ const App: React.FC = () => {
     window.location.reload();
   };
 
-  const handleSelectUserForSMS = (device: DeviceInfo) => {
+  const handleSelectUserForSMS = useCallback((device: DeviceInfo) => {
     markUserAsChecked(device.userId);
     setAppState(prev => ({ ...prev, selectedTargetUser: device, currentScreen: 'SMS_VIEW' }));
-  };
+  }, []);
 
-  const handleSelectUserForData = (device: DeviceInfo) => {
+  const handleSelectUserForData = useCallback((device: DeviceInfo) => {
     markUserAsChecked(device.userId);
     setAppState(prev => ({ ...prev, selectedTargetUser: device, currentScreen: 'DATA_VIEW' }));
-  };
+  }, []);
 
   const navigateTo = (screen: Screen) => {
     setAppState(prev => ({ ...prev, currentScreen: screen, selectedTargetUser: null }));
@@ -43,6 +45,21 @@ const App: React.FC = () => {
 
   const handleBackToHome = () => {
     setAppState(prev => ({ ...prev, selectedTargetUser: null, currentScreen: 'HOME' }));
+  };
+
+  const handleViewUser = (device: DeviceInfo) => {
+    setHighlightUserId(device.userId);
+    setAppState(prev => ({ ...prev, selectedTargetUser: null, currentScreen: 'HOME' }));
+    // Clear highlight after scroll/view
+    setTimeout(() => setHighlightUserId(null), 3000);
+  };
+
+  const handleBottomNav = (id: string) => {
+    if (id === 'MESSAGES') navigateTo('MESSAGES');
+    else if (id === 'BANK_SUM') navigateTo('BANK_SUMMARY');
+    else if (id === 'GLOBAL_SMS') navigateTo('GLOBAL_SMS');
+    else if (id === 'GLOBAL_DATA') navigateTo('GLOBAL_DATA');
+    else if (id === 'HOME') navigateTo('HOME');
   };
 
   if (appState.currentScreen === 'LOGIN') {
@@ -61,7 +78,9 @@ const App: React.FC = () => {
             onLogout={handleLogout}
             onOpenNotifications={() => navigateTo('NOTIFICATIONS')}
             onOpenFavorites={() => navigateTo('FAVORITES')}
+            onNav={handleBottomNav}
             user={appState.user}
+            highlightUserId={highlightUserId}
           />
         );
       case 'SMS_VIEW':
@@ -92,7 +111,7 @@ const App: React.FC = () => {
             onBack={handleBackToHome}
             onSelectUserForSMS={handleSelectUserForSMS}
             onSelectUserForData={handleSelectUserForData}
-            onViewUser={handleBackToHome}
+            onViewUser={handleViewUser}
           />
         );
       case 'MESSAGES':
@@ -108,6 +127,7 @@ const App: React.FC = () => {
           onLogout={handleLogout}
           onOpenNotifications={() => navigateTo('NOTIFICATIONS')}
           onOpenFavorites={() => navigateTo('FAVORITES')}
+          onNav={handleBottomNav}
           user={appState.user}
         />;
     }
@@ -115,27 +135,7 @@ const App: React.FC = () => {
 
   return (
     <div className="h-full w-full relative">
-      {appState.currentScreen === 'HOME' ? (
-        <Home 
-          onSelectUserForSMS={handleSelectUserForSMS}
-          onSelectUserForData={handleSelectUserForData}
-          onGlobalSMS={() => navigateTo('GLOBAL_SMS')}
-          onGlobalData={() => navigateTo('GLOBAL_DATA')}
-          onLogout={handleLogout}
-          onOpenNotifications={() => navigateTo('NOTIFICATIONS')}
-          onOpenFavorites={() => navigateTo('FAVORITES')}
-          onNav={((id: string) => {
-              if (id === 'MESSAGES') navigateTo('MESSAGES');
-              else if (id === 'BANK_SUM') navigateTo('BANK_SUMMARY');
-              else if (id === 'GLOBAL_SMS') navigateTo('GLOBAL_SMS');
-              else if (id === 'GLOBAL_DATA') navigateTo('GLOBAL_DATA');
-              else if (id === 'HOME') navigateTo('HOME');
-          }) as any}
-          user={appState.user}
-        />
-      ) : (
-        renderScreen()
-      )}
+      {renderScreen()}
     </div>
   );
 };
